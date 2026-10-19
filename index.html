@@ -121,6 +121,13 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .sugg .src{color:var(--accent);font-weight:700}
 .sugg .msg{padding:10px 12px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}
 .sugg .msg:first-child{border-top:0}
+.scanbtn{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--accent);border-color:var(--accent);font-weight:700}
+.scanbg{position:fixed;inset:0;z-index:30;background:rgba(20,6,16,.82);display:flex;align-items:center;justify-content:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.scanbox{background:var(--surface);border-radius:20px;padding:16px;width:100%;max-width:480px;display:flex;flex-direction:column;gap:12px}
+.scanbox .head{display:flex;justify-content:space-between;align-items:center}
+.scanbox h2{font-size:21px}
+#reader{width:100%;min-height:200px;border-radius:12px;overflow:hidden;background:#000}
+#reader video{width:100%!important;height:auto!important;display:block}
 .meal header .right{display:flex;gap:10px;align-items:baseline}
 .copybtn{background:none;border:0;color:var(--accent);font-size:13px;font-weight:700;padding:2px 0}
 .copyday{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -226,6 +233,7 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
   <form class="sheet" id="addForm" autocomplete="off">
     <div class="head"><h2 id="sheetTitle">Add food</h2><button type="button" class="iconbtn" id="closeSheet" aria-label="Close">✕</button></div>
     <div class="field"><label>My foods</label><div class="chips" id="savedChips"></div></div>
+    <button type="button" class="ghost scanbtn" id="scanBtn"><svg viewBox="0 0 24 16" width="22" height="15" aria-hidden="true"><path d="M1 1v14M4 1v14M6 1v14M9 1v14M12 1v14M13.5 1v14M16 1v14M19 1v14M21 1v14M23 1v14" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>Scan barcode</button>
     <div class="field"><label for="fName">Food</label><input id="fName" placeholder="Type a food or brand, e.g. Chobani" required autocomplete="off">
       <div class="sugg" id="sugg" hidden></div></div>
     <div class="grid3">
@@ -241,6 +249,15 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
     <div class="preview" id="fPreview"></div>
     <button class="primary" type="submit">Add to day</button>
   </form>
+</div>
+
+<div class="scanbg" id="scanBg" hidden>
+  <div class="scanbox">
+    <div class="head"><h2>Scan barcode</h2><button type="button" class="iconbtn" id="scanClose" aria-label="Close scanner">✕</button></div>
+    <div id="reader"></div>
+    <p class="note" id="scanMsg" style="margin:0"></p>
+    <button type="button" class="primary" id="scanAgain" hidden>Scan again</button>
+  </div>
 </div>
 
 <script>
@@ -399,6 +416,86 @@ async function searchFDC(q){
     renderSugg(q,items,items.length?"":"No matches. Try fewer words, or type the numbers in.");
   }catch(e){if(seq===sSeq)renderSugg(q,[],"Couldn't reach the food database. Check your connection, or type the numbers in.")}
 }
+/* barcode scanning: camera via html5-qrcode, lookup in Open Food Facts, then USDA */
+let scanner=null,scanBusy=false;
+function loadScanLib(){
+  if(window.Html5Qrcode)return Promise.resolve();
+  return new Promise((res,rej)=>{const s=document.createElement("script");
+    s.src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js";s.onload=res;s.onerror=()=>rej(new Error("lib"));document.head.appendChild(s)});
+}
+async function stopScan(){
+  if(!scanner)return;
+  try{if(scanner.isScanning)await scanner.stop()}catch(e){}
+  try{scanner.clear()}catch(e){}
+  scanner=null;
+}
+async function openScan(){
+  $("scanBg").hidden=false;$("scanAgain").hidden=true;$("scanMsg").textContent="Starting camera…";scanBusy=false;
+  try{
+    await loadScanLib();
+    const F=Html5QrcodeSupportedFormats;
+    scanner=new Html5Qrcode("reader",{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E],experimentalFeatures:{useBarCodeDetectorIfSupported:true},verbose:false});
+    await scanner.start({facingMode:"environment"},
+      {fps:12,qrbox:(w,h)=>({width:Math.max(120,Math.floor(w*0.85)),height:Math.max(80,Math.floor(Math.min(w,h)*0.45))})},
+      onScan,()=>{});
+    $("scanMsg").textContent="Hold the barcode inside the box and keep the phone steady.";
+  }catch(e){
+    $("scanMsg").textContent=e&&e.message==="lib"
+      ?"Couldn't load the scanner. Check your connection and try again."
+      :"The camera didn't start. Allow camera access for this site when your phone asks (or in its browser settings), then tap Scan again.";
+    $("scanAgain").hidden=false;
+  }
+}
+async function closeScan(){await stopScan();$("scanBg").hidden=true}
+async function onScan(code){
+  if(scanBusy)return;scanBusy=true;
+  try{navigator.vibrate&&navigator.vibrate(60)}catch(e){}
+  await stopScan();
+  $("scanMsg").textContent=`Found ${code}. Looking it up…`;
+  const food=await lookupBarcode(code);
+  if(food){
+    $("fName").value=food.name;$("fP").value=food.p;$("fC").value=food.c;$("fF").value=food.f;$("fS").value=1;
+    $("fSave").checked=true;$("sugg").hidden=true;updPreview();$("scanBg").hidden=true;
+  }else{
+    $("scanMsg").textContent=`Barcode ${code} isn't in the food databases yet. Close this and type the numbers from the label, and it'll be saved to My foods for next time.`;
+    $("scanAgain").hidden=false;
+  }
+}
+function mapOFF(p){
+  const n=p.nutriments||{},g=k=>{const v=parseFloat(n[k]);return isFinite(v)?v:null};
+  let P=g("proteins_serving"),C=g("carbohydrates_serving"),Fa=g("fat_serving"),serving=String(p.serving_size||"").trim();
+  if(P===null&&C===null&&Fa===null){
+    P=g("proteins_100g");C=g("carbohydrates_100g");Fa=g("fat_100g");
+    if(P===null&&C===null&&Fa===null)return null;
+    const q=parseFloat(p.serving_quantity);
+    if(q>0&&serving){const m=q/100;P=(P||0)*m;C=(C||0)*m;Fa=(Fa||0)*m}else serving="100 g";
+  }
+  const brand=String(p.brands||"").split(",")[0].trim(),name=String(p.product_name||"").trim()||"Scanned item";
+  const full=`${brand&&!name.toLowerCase().includes(brand.toLowerCase())?brand+" ":""}${name}${serving?", "+serving:""}`;
+  return {name:full,p:r1(P||0),c:r1(C||0),f:r1(Fa||0)};
+}
+async function lookupBarcode(code){
+  const tries=[code];
+  if(code.length===12)tries.push("0"+code);
+  if(code.length===13&&code[0]==="0")tries.push(code.slice(1));
+  for(const c of tries){
+    try{
+      const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${c}.json?fields=product_name,brands,serving_size,serving_quantity,nutriments`);
+      if(r.ok){const j=await r.json();if(j.status===1&&j.product){const m=mapOFF(j.product);if(m)return m}}
+    }catch(e){}
+  }
+  try{
+    const r=await fetch(`https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${FDC_KEY}&query=${code}&dataType=Branded&pageSize=5`);
+    if(r.ok){const j=await r.json(),strip=s=>String(s||"").replace(/^0+/,"");
+      const hit=(j.foods||[]).find(f=>strip(f.gtinUpc)===strip(code));
+      if(hit){const m=mapFDC(hit);if(m)return m}}
+  }catch(e){}
+  return null;
+}
+$("scanBtn").onclick=openScan;
+$("scanAgain").onclick=openScan;
+$("scanClose").onclick=closeScan;
+
 $("sugg").onclick=e=>{
   const b=e.target.closest("[data-s]");if(!b)return;const f=suggItems[b.dataset.s];
   $("fName").value=f.name;$("fP").value=f.p;$("fC").value=f.c;$("fF").value=f.f;$("fSave").checked=!f.mine;
