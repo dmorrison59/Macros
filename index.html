@@ -112,6 +112,21 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .preview b{color:var(--ink)}
 .check{display:flex;gap:8px;align-items:center;font-size:14px}
 .check input{width:20px;height:20px;accent-color:var(--accent)}
+.meal header .right{display:flex;gap:10px;align-items:baseline}
+.copybtn{background:none;border:0;color:var(--accent);font-size:13px;font-weight:700;padding:2px 0}
+.copyday{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.copyday p{margin:0;font-size:14px}
+.copyday button{flex:none;height:42px;padding:0 14px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-ink);font-weight:700}
+.chart{overflow-x:auto}
+.chart svg{width:100%;min-width:280px;height:auto;display:block}
+.chart text{font-family:var(--body);font-size:11px;fill:var(--muted)}
+.weightrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+.weightrow .primary{width:auto;padding:0 20px;height:46px}
+.wsum{display:flex;gap:18px;flex-wrap:wrap;font-size:14px;color:var(--muted)}
+.wsum b{display:block;font-family:var(--display);font-size:22px;font-weight:800;color:var(--ink)}
+.wlist{display:flex;flex-direction:column}
+.wlist div{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.empty{font-size:14px;color:var(--muted);text-align:center;padding:18px 8px;border:1px dashed var(--line);border-radius:12px}
 @media (max-width:360px){.totals{grid-template-columns:1fr;justify-items:center}.bars{width:100%}}
 </style>
 </head><body>
@@ -132,7 +147,27 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
     <div style="min-width:0"><h3>Water</h3><div class="amt" id="waterAmt"></div><div class="glasses" id="glasses"></div></div>
     <div class="wbtns"><button class="wbtn" id="waterMinus" aria-label="Remove 8 ounces">−</button><button class="wbtn add" id="waterPlus">+ 8 oz</button></div>
   </div>
+  <div class="card copyday" id="copyDay" hidden><p id="copyDayText"></p><button id="copyDayBtn">Copy all</button></div>
   <div class="stack" id="meals"></div>
+</div>
+
+<div class="wrap" id="progressView" hidden>
+  <div class="daybar"><div><div class="sub">Last 7 days</div><h1>Progress</h1></div></div>
+  <div class="card stack">
+    <div><h2 class="section-title" style="margin:0">This week</h2><p class="note" style="margin:4px 0 0" id="weekNote"></p></div>
+    <div class="result" id="weekAvg"></div>
+    <div class="chart" id="weekChart"></div>
+  </div>
+  <div class="card stack">
+    <h2 class="section-title" style="margin:0">Weight</h2>
+    <div class="weightrow">
+      <div class="field"><label for="wIn">Today's weight (lb)</label><input id="wIn" type="number" inputmode="decimal" step="0.1" min="50" max="600"></div>
+      <button class="primary" id="wSave">Log</button>
+    </div>
+    <div class="wsum" id="wSum"></div>
+    <div class="chart" id="wChart"></div>
+    <div class="wlist" id="wList"></div>
+  </div>
 </div>
 
 <div class="wrap" id="goalsView" hidden>
@@ -174,7 +209,8 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 
 <nav class="tabs" role="tablist">
   <button class="tab" role="tab" id="tabToday" aria-selected="true">Today</button>
-  <button class="tab" role="tab" id="tabGoals" aria-selected="false">Macro goals</button>
+  <button class="tab" role="tab" id="tabProgress" aria-selected="false">Progress</button>
+  <button class="tab" role="tab" id="tabGoals" aria-selected="false">Goals</button>
 </nav>
 
 <div class="sheet-bg" id="sheetBg" hidden>
@@ -218,9 +254,23 @@ function sample(){
       {id:4,meal:"Lunch",name:"Brown rice, 1 cup",p:5,c:45,f:1.8,s:0.5},
       {id:5,meal:"Snacks",name:"Almonds, 1 oz",p:6,c:6,f:14,s:1}]}}};
 }
+function addSampleHistory(s){
+  const F=s.foods,w=[152.4,152.0,151.8,151.9,151.2,151.0,150.6];
+  s.weights={};
+  for(let i=6;i>=1;i--){
+    const d=new Date(today+"T12:00:00");d.setDate(d.getDate()-i);const k=iso(d),v=i%3;
+    s.days[k]={water:5+v,entries:[
+      {id:i*10+1,meal:"Breakfast",...F[0],s:1},{id:i*10+2,meal:"Lunch",...F[1],s:1+v*0.25},
+      {id:i*10+3,meal:"Lunch",...F[4],s:1},{id:i*10+4,meal:"Dinner",...F[1],s:1.5},
+      {id:i*10+5,meal:"Snacks",...F[3],s:v?1:0.5}]};
+    s.weights[k]=w[6-i];
+  }
+  s.weights[today]=w[6];
+}
 let S;
 try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){}
-if(!S||!S.goals)S=sample();
+if(!S||!S.goals){S=sample();addSampleHistory(S)}
+S.weights=S.weights||{};
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
 let cur=today;
 const day=()=>S.days[cur]||(S.days[cur]={water:0,entries:[]});
@@ -247,10 +297,14 @@ function render(){
   const wGlasses=Math.max(1,Math.round(g.water/8));
   $("waterAmt").textContent=`${d.water*8} of ${g.water} oz`;
   $("glasses").innerHTML=Array.from({length:Math.max(wGlasses,d.water)},(_,i)=>`<span class="glass${i<d.water?" on":""}"></span>`).join("");
+  const pk=prevKey(),pd=S.days[pk],pName=new Date(pk+"T12:00:00").toLocaleDateString(undefined,{weekday:"long"});
+  const prevHas=m=>pd&&pd.entries.some(e=>e.meal===m);
+  $("copyDay").hidden=!(d.entries.length===0&&pd&&pd.entries.length);
+  if(!$("copyDay").hidden)$("copyDayText").textContent=`Eating the same as ${pName}? Copy all ${pd.entries.length} items.`;
   $("meals").innerHTML=MEALS.map(m=>{
     const es=d.entries.filter(e=>e.meal===m);
     const mc=es.reduce((a,e)=>a+kcal(e.p*e.s,e.c*e.s,e.f*e.s),0);
-    return `<section class="card meal"><header><h3>${m}</h3><span>${mc?mc+" cal":""}</span></header>${es.map(e=>`
+    return `<section class="card meal"><header><h3>${m}</h3><div class="right">${prevHas(m)?`<button class="copybtn" data-copy="${m}">Copy ${pName.slice(0,3)}</button>`:""}<span>${mc?mc+" cal":""}</span></div></header>${es.map(e=>`
       <div class="entry"><div class="info"><div class="name">${esc(e.name)}${e.s!==1?` <span class="note">× ${e.s}</span>`:""}</div>
       <div class="mac"><span><i class="dot" style="background:var(--protein)"></i>P ${r1(e.p*e.s)}</span><span><i class="dot" style="background:var(--carbs)"></i>C ${r1(e.c*e.s)}</span><span><i class="dot" style="background:var(--fat)"></i>F ${r1(e.f*e.s)}</span></div></div>
       <div class="cal">${kcal(e.p*e.s,e.c*e.s,e.f*e.s)}</div><button class="del" data-del="${e.id}" aria-label="Remove ${esc(e.name)}">✕</button></div>`).join("")}
@@ -262,8 +316,16 @@ $("prevDay").onclick=()=>{const d=new Date(cur+"T12:00:00");d.setDate(d.getDate(
 $("nextDay").onclick=()=>{const d=new Date(cur+"T12:00:00");d.setDate(d.getDate()+1);cur=iso(d);render()};
 $("waterPlus").onclick=()=>{day().water++;save();render()};
 $("waterMinus").onclick=()=>{const d=day();if(d.water>0)d.water--;save();render()};
-$("clearSample").onclick=()=>{const g=S.goals,p=S.profile;S={goals:g,profile:p,foods:[],days:{}};save();render();fillGoals()};
+$("clearSample").onclick=()=>{const g=S.goals,p=S.profile;S={goals:g,profile:p,foods:[],days:{},weights:{}};save();render();fillGoals()};
+function prevKey(){const x=new Date(cur+"T12:00:00");x.setDate(x.getDate()-1);return iso(x)}
+function copyFrom(meal){
+  const pd=S.days[prevKey()];if(!pd)return;let n=Date.now();
+  pd.entries.filter(e=>!meal||e.meal===meal).forEach(e=>day().entries.push({...e,id:n++}));
+  delete S.sample;save();render();
+}
+$("copyDayBtn").onclick=()=>copyFrom(null);
 $("meals").onclick=e=>{
+  const cp=e.target.closest("[data-copy]");if(cp){copyFrom(cp.dataset.copy);return}
   const del=e.target.closest("[data-del]");
   if(del){const d=day();d.entries=d.entries.filter(x=>x.id!=del.dataset.del);save();render();return}
   const add=e.target.closest("[data-add]");if(add)openSheet(add.dataset.add);
@@ -295,9 +357,59 @@ $("addForm").addEventListener("submit",e=>{
 });
 
 /* tabs */
-function tab(which){const t=which==="today";$("todayView").hidden=!t;$("goalsView").hidden=t;
-  $("tabToday").setAttribute("aria-selected",t);$("tabGoals").setAttribute("aria-selected",!t);window.scrollTo(0,0);if(t)render()}
-$("tabToday").onclick=()=>tab("today");$("tabGoals").onclick=()=>tab("goals");
+function tab(which){
+  [["today","todayView","tabToday"],["progress","progressView","tabProgress"],["goals","goalsView","tabGoals"]].forEach(([k,v,t])=>{
+    $(v).hidden=k!==which;$(t).setAttribute("aria-selected",k===which)});
+  window.scrollTo(0,0);if(which==="today")render();if(which==="progress")renderProgress();
+}
+$("tabToday").onclick=()=>tab("today");$("tabProgress").onclick=()=>tab("progress");$("tabGoals").onclick=()=>tab("goals");
+
+/* progress */
+function totalsFor(k){const d=S.days[k];let p=0,c=0,f=0;if(d)d.entries.forEach(e=>{p+=e.p*e.s;c+=e.c*e.s;f+=e.f*e.s});
+  return {p,c,f,cal:kcal(p,c,f),water:d?d.water:0,n:d?d.entries.length:0}}
+function renderProgress(){
+  const keys=[];for(let i=6;i>=0;i--){const x=new Date(today+"T12:00:00");x.setDate(x.getDate()-i);keys.push(iso(x))}
+  const T=keys.map(totalsFor),logged=T.filter(t=>t.n),g=S.goals,goalCal=kcal(g.p,g.c,g.f);
+  const avg=k=>logged.length?Math.round(logged.reduce((a,t)=>a+t[k],0)/logged.length):0;
+  $("weekNote").textContent=logged.length?`Daily averages from ${logged.length} logged day${logged.length>1?"s":""}. Water averaged ${avg("water")*8} oz.`:"Log some food and your weekly averages will show up here.";
+  $("weekAvg").innerHTML=`<div><b>${avg("cal").toLocaleString()}</b><small>of ${goalCal.toLocaleString()} cal</small></div><div><b style="color:var(--protein)">${avg("p")}g</b><small>of ${g.p}g P</small></div><div><b style="color:var(--carbs)">${avg("c")}g</b><small>of ${g.c}g C</small></div><div><b style="color:var(--fat)">${avg("f")}g</b><small>of ${g.f}g F</small></div>`;
+  // calorie bars
+  const W=320,H=170,L=8,R=8,top=16,bot=24,ch=H-top-bot,max=Math.max(goalCal*1.25,...T.map(t=>t.cal),1);
+  const y=v=>top+ch-(v/max)*ch,bw=(W-L-R)/7;
+  let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Calories per day for the last 7 days">`;
+  T.forEach((t,i)=>{const x=L+i*bw+bw*0.18,w=bw*0.64,h=Math.max(top+ch-y(t.cal),t.cal?2:0),over=t.cal>goalCal*1.05;
+    s+=`<rect x="${x.toFixed(1)}" y="${(top+ch-h).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="5" fill="var(${over?"--warn":"--accent"})" opacity="${keys[i]===today?1:.8}"/>`;
+    if(t.cal)s+=`<text x="${(x+w/2).toFixed(1)}" y="${(top+ch-h-4).toFixed(1)}" text-anchor="middle" style="font-size:10px">${t.cal}</text>`;
+    s+=`<text x="${(x+w/2).toFixed(1)}" y="${H-7}" text-anchor="middle" style="${keys[i]===today?"fill:var(--ink);font-weight:700":""}">${new Date(keys[i]+"T12:00:00").toLocaleDateString(undefined,{weekday:"short"}).slice(0,3)}</text>`});
+  s+=`<line x1="${L}" x2="${W-R}" y1="${y(goalCal).toFixed(1)}" y2="${y(goalCal).toFixed(1)}" stroke="var(--ink)" stroke-width="1" stroke-dasharray="4 4" opacity=".55"/>`;
+  s+=`<text x="${W-R}" y="${(y(goalCal)-4).toFixed(1)}" text-anchor="end" style="fill:var(--ink);font-weight:600">Goal ${goalCal}</text>`;
+  s+=`<line x1="${L}" x2="${W-R}" y1="${top+ch}" y2="${top+ch}" stroke="var(--line)"/></svg>`;
+  $("weekChart").innerHTML=logged.length?s:"";
+  // weight
+  const ws=Object.keys(S.weights).sort().map(k=>({k,v:S.weights[k]}));
+  $("wIn").value=S.weights[today]??"";
+  if(!ws.length){$("wSum").innerHTML="";$("wChart").innerHTML=`<div class="empty">Log your weight to start a trend line. Weighing at the same time each day gives the clearest picture.</div>`;$("wList").innerHTML="";return}
+  const first=ws[0],last=ws[ws.length-1],chg=r1(last.v-first.v);
+  $("wSum").innerHTML=`<div><b>${last.v}</b>latest lb</div><div><b>${chg>0?"+":""}${chg}</b>since ${new Date(first.k+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"})}</div>`;
+  const pts=ws.slice(-30);
+  if(pts.length>1){
+    const vs=pts.map(p=>p.v),lo=Math.floor(Math.min(...vs)-1),hi=Math.ceil(Math.max(...vs)+1);
+    const t0=new Date(pts[0].k+"T12:00:00"),span=Math.max((new Date(pts[pts.length-1].k+"T12:00:00")-t0)/864e5,1);
+    const WL=34,WR=12,WT=12,WB=24,WH=150,cw=W-WL-WR,chh=WH-WT-WB;
+    const px=p=>WL+((new Date(p.k+"T12:00:00")-t0)/864e5/span)*cw,py=v=>WT+chh-((v-lo)/(hi-lo))*chh;
+    const line=pts.map((p,i)=>`${i?"L":"M"}${px(p).toFixed(1)},${py(p.v).toFixed(1)}`).join("");
+    const area=`${line}L${px(pts[pts.length-1]).toFixed(1)},${WT+chh}L${px(pts[0]).toFixed(1)},${WT+chh}Z`;
+    const lp=pts[pts.length-1],fmt=k=>new Date(k+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"});
+    $("wChart").innerHTML=`<svg viewBox="0 0 ${W} ${WH}" role="img" aria-label="Weight trend">
+      ${[lo,hi].map(v=>`<line x1="${WL}" x2="${W-WR}" y1="${py(v)}" y2="${py(v)}" stroke="var(--line)"/><text x="${WL-6}" y="${py(v)+4}" text-anchor="end">${v}</text>`).join("")}
+      <path d="${area}" fill="var(--accent)" opacity=".12"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${px(lp).toFixed(1)}" cy="${py(lp.v).toFixed(1)}" r="5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>
+      <text x="${WL}" y="${WH-6}">${fmt(pts[0].k)}</text><text x="${W-WR}" y="${WH-6}" text-anchor="end">${fmt(lp.k)}</text></svg>`;
+  }else $("wChart").innerHTML=`<div class="empty">One more entry and your trend line appears.</div>`;
+  $("wList").innerHTML=ws.slice(-7).reverse().map(p=>`<div><span>${new Date(p.k+"T12:00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"})}</span><span style="display:flex;align-items:center;gap:4px"><b>${p.v} lb</b><button class="del" data-w="${p.k}" aria-label="Remove weight for ${p.k}">✕</button></span></div>`).join("");
+}
+$("wSave").onclick=()=>{const v=parseFloat($("wIn").value);if(!(v>=50&&v<=600))return;S.weights[today]=r1(v);delete S.sample;save();renderProgress()};
+$("wList").onclick=e=>{const b=e.target.closest("[data-w]");if(b){delete S.weights[b.dataset.w];save();renderProgress()}};
 
 /* calculator — Mifflin-St Jeor */
 let calc=null;
