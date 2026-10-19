@@ -112,6 +112,15 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .preview b{color:var(--ink)}
 .check{display:flex;gap:8px;align-items:center;font-size:14px}
 .check input{width:20px;height:20px;accent-color:var(--accent)}
+.sugg{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;max-height:290px;overflow-y:auto;background:var(--surface);margin-top:4px}
+.sugg button{text-align:left;background:transparent;border:0;border-top:1px solid var(--line);padding:10px 12px;display:block;width:100%}
+.sugg button:first-child{border-top:0}
+.sugg button:hover,.sugg button:focus-visible{background:var(--bg)}
+.sugg .t{font-weight:600;overflow-wrap:anywhere}
+.sugg .m{font-size:12px;color:var(--muted)}
+.sugg .src{color:var(--accent);font-weight:700}
+.sugg .msg{padding:10px 12px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}
+.sugg .msg:first-child{border-top:0}
 .meal header .right{display:flex;gap:10px;align-items:baseline}
 .copybtn{background:none;border:0;color:var(--accent);font-size:13px;font-weight:700;padding:2px 0}
 .copyday{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -217,7 +226,8 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
   <form class="sheet" id="addForm" autocomplete="off">
     <div class="head"><h2 id="sheetTitle">Add food</h2><button type="button" class="iconbtn" id="closeSheet" aria-label="Close">✕</button></div>
     <div class="field"><label>My foods</label><div class="chips" id="savedChips"></div></div>
-    <div class="field"><label for="fName">Food</label><input id="fName" placeholder="e.g. Greek yogurt, 1 cup" required></div>
+    <div class="field"><label for="fName">Food</label><input id="fName" placeholder="Type a food or brand, e.g. Chobani" required autocomplete="off">
+      <div class="sugg" id="sugg" hidden></div></div>
     <div class="grid3">
       <div class="field"><label for="fP">Protein g</label><input id="fP" type="number" inputmode="decimal" step="0.1" min="0" value="0"></div>
       <div class="field"><label for="fC">Carbs g</label><input id="fC" type="number" inputmode="decimal" step="0.1" min="0" value="0"></div>
@@ -337,8 +347,63 @@ function openSheet(meal){
   $("addForm").reset();$("fS").value=1;["fP","fC","fF"].forEach(i=>$(i).value=0);
   $("fMeal").value=meal;$("sheetTitle").textContent="Add to "+meal;
   $("savedChips").innerHTML=S.foods.length?S.foods.map((f,i)=>`<button type="button" class="chip" data-food="${i}">${esc(f.name)}</button>`).join(""):`<span class="note">Foods you add will show up here for one-tap logging.</span>`;
+  $("sugg").hidden=true;$("sugg").innerHTML="";
   $("sheetBg").hidden=false;updPreview();setTimeout(()=>$("fName").focus(),50);
 }
+
+/* food search: My foods first, then the USDA FoodData Central database */
+const FDC_KEY="cNCPCNgbdctD9RGbmB8tbFWmwN7KR7nwTphT6HPL";
+let sTimer,sSeq=0,suggItems=[];const sCache={};
+const tc=s=>String(s||"").toLowerCase().replace(/(^|[\s(\/-])([a-z])/g,(m,a,b)=>a+b.toUpperCase());
+$("fName").addEventListener("input",()=>{
+  clearTimeout(sTimer);const q=$("fName").value.trim();
+  renderSugg(q,sCache[q.toLowerCase()]||[],"");
+  if(q.length<3||sCache[q.toLowerCase()])return;
+  sTimer=setTimeout(()=>searchFDC(q),450);
+});
+function renderSugg(q,remote,status){
+  const box=$("sugg");
+  if(q.length<2){box.hidden=true;box.innerHTML="";return}
+  const l=q.toLowerCase();
+  const loc=S.foods.filter(f=>f.name.toLowerCase().includes(l)).slice(0,4).map(f=>({...f,mine:true}));
+  suggItems=[...loc,...remote];
+  let h=suggItems.map((f,i)=>`<button type="button" data-s="${i}"><div class="t">${esc(f.name)}</div><div class="m">${f.mine?'<span class="src">My foods</span> · ':""}${kcal(f.p,f.c,f.f)} cal · P ${r1(f.p)} · C ${r1(f.c)} · F ${r1(f.f)}</div></button>`).join("");
+  if(status)h+=`<div class="msg">${status}</div>`;
+  box.innerHTML=h;box.hidden=!h;
+}
+function nut(f,id,num){const n=(f.foodNutrients||[]).find(x=>x.nutrientId===id||String(x.nutrientNumber)===num);return n?(+n.value||0):0}
+function mapFDC(f){
+  const p=nut(f,1003,"203"),fat=nut(f,1004,"204"),c=nut(f,1005,"205");
+  if(!p&&!fat&&!c)return null;
+  let mult=1,serving="100 g";
+  const u=String(f.servingSizeUnit||"").toLowerCase(),isG=["g","grm","gm"].includes(u),isMl=["ml","mlt"].includes(u);
+  if(f.dataType==="Branded"&&f.servingSize&&(isG||isMl)){
+    mult=f.servingSize/100;const amt=`${Math.round(f.servingSize)} ${isG?"g":"ml"}`;
+    const hh=String(f.householdServingFullText||"").trim().toLowerCase();
+    serving=hh&&!/^\d+(\.\d+)?\s*(g|ml)$/.test(hh)?`${hh} (${amt})`:amt;
+  }
+  const brand=f.dataType==="Branded"?(f.brandName||f.brandOwner||""):"";
+  return {name:`${brand?tc(brand)+" ":""}${tc(f.description)}, ${serving}`,p:r1(p*mult),c:r1(c*mult),f:r1(fat*mult)};
+}
+async function searchFDC(q){
+  const seq=++sSeq,key=q.toLowerCase();
+  renderSugg(q,[],"Searching…");
+  try{
+    const r=await fetch(`https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${FDC_KEY}&query=${encodeURIComponent(q)}&pageSize=15`);
+    if(seq!==sSeq)return;
+    if(r.status===429||r.status===403){renderSugg(q,[],"Search is busy right now. Try again in a bit, or type the numbers in.");return}
+    if(!r.ok)throw new Error(r.status);
+    const j=await r.json();if(seq!==sSeq)return;
+    const seen=new Set(),items=(j.foods||[]).map(mapFDC).filter(x=>x&&!seen.has(x.name)&&seen.add(x.name)).slice(0,12);
+    sCache[key]=items;
+    renderSugg(q,items,items.length?"":"No matches. Try fewer words, or type the numbers in.");
+  }catch(e){if(seq===sSeq)renderSugg(q,[],"Couldn't reach the food database. Check your connection, or type the numbers in.")}
+}
+$("sugg").onclick=e=>{
+  const b=e.target.closest("[data-s]");if(!b)return;const f=suggItems[b.dataset.s];
+  $("fName").value=f.name;$("fP").value=f.p;$("fC").value=f.c;$("fF").value=f.f;$("fSave").checked=!f.mine;
+  $("sugg").hidden=true;updPreview();$("fS").focus();
+};
 const closeSheet=()=>{$("sheetBg").hidden=true};
 $("closeSheet").onclick=closeSheet;
 $("sheetBg").onclick=e=>{if(e.target===$("sheetBg"))closeSheet()};
