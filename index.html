@@ -221,6 +221,18 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
     <div class="preview" id="goalCal"></div>
     <button class="primary" id="saveGoals">Save targets</button>
   </div>
+  <div class="card stack">
+    <h2 class="section-title" style="margin:0">Your data</h2>
+    <p class="note" style="margin:0" id="dataNote"></p>
+    <button class="primary" id="exportBtn">Export my data</button>
+    <button class="ghost" id="importBtn">Restore from a file</button>
+    <input type="file" id="importFile" accept=".json,application/json" hidden>
+    <div class="stack" id="importConfirm" hidden>
+      <p class="note" style="margin:0;color:var(--warn);font-weight:600" id="importText"></p>
+      <div class="grid2"><button class="ghost" id="importCancel">Cancel</button><button class="primary" id="importGo">Replace my data</button></div>
+    </div>
+    <p class="note" style="margin:0" id="dataMsg"></p>
+  </div>
 </div>
 
 <nav class="tabs" role="tablist">
@@ -603,6 +615,49 @@ function updGoalCal(){$("goalCal").innerHTML=`That's <b>${kcal(+$("gP").value||0
 ["gP","gC","gF"].forEach(i=>$(i).addEventListener("input",updGoalCal));
 $("saveGoals").onclick=()=>{S.goals={p:+$("gP").value||0,c:+$("gC").value||0,f:+$("gF").value||0,water:+$("gW").value||64};save();$("saveGoals").textContent="Saved ✓";setTimeout(()=>$("saveGoals").textContent="Save targets",1600)};
 
-fillGoals();render();
+/* export / restore */
+function dataSummary(s){
+  const days=Object.values(s.days||{}).filter(d=>d.entries&&d.entries.length).length;
+  return `${days} logged day${days===1?"":"s"}, ${(s.foods||[]).length} saved foods, ${Object.keys(s.weights||{}).length} weigh-ins`;
+}
+function updDataNote(){$("dataNote").textContent=`Saves a backup file with your goals, food log, water, weight, and saved foods (${dataSummary(S)}). Use it to move your data to a new phone or the full app.`}
+$("exportBtn").onclick=async()=>{
+  const json=JSON.stringify({app:"macro-tracker",version:1,exportedAt:new Date().toISOString(),data:S},null,1);
+  const name=`macros-backup-${today}.json`;
+  $("dataMsg").textContent="";
+  try{
+    const file=new File([json],name,{type:"application/json"});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){
+      await navigator.share({files:[file],title:"Macros backup"});
+      $("dataMsg").textContent="Backup shared.";return;
+    }
+  }catch(e){if(e&&e.name==="AbortError")return}
+  try{
+    const url=URL.createObjectURL(new Blob([json],{type:"application/json"}));
+    const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+    $("dataMsg").textContent=`Saved ${name} to your Downloads.`;
+  }catch(e){$("dataMsg").textContent="Couldn't save the file on this device."}
+};
+let pending=null;
+$("importBtn").onclick=()=>{$("importFile").value="";$("importFile").click()};
+$("importFile").onchange=async()=>{
+  const f=$("importFile").files[0];if(!f)return;
+  try{
+    const j=JSON.parse(await f.text()),d=j&&j.data;
+    if(!d||!d.goals||!d.days)throw 0;
+    pending=d;
+    $("importText").textContent=`This backup has ${dataSummary(d)}. Restoring it replaces everything currently in the app.`;
+    $("importConfirm").hidden=false;$("dataMsg").textContent="";
+  }catch(e){$("dataMsg").textContent="That file isn't a Macros backup. Pick the .json file made by Export my data."}
+};
+$("importCancel").onclick=()=>{pending=null;$("importConfirm").hidden=true};
+$("importGo").onclick=()=>{
+  if(!pending)return;S=pending;S.weights=S.weights||{};S.foods=S.foods||[];delete S.sample;pending=null;
+  save();$("importConfirm").hidden=true;fillGoals();render();updDataNote();$("dataMsg").textContent="Your data was restored.";
+};
+$("tabGoals").addEventListener("click",updDataNote);
+
+fillGoals();render();updDataNote();
 </script>
 </body></html>
